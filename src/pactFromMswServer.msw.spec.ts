@@ -134,6 +134,7 @@ describe("API - With MSW mock generating a pact", () => {
     expect(pactResults[0].interactions[0].request.headers).toEqual({
       accept: "application/json, text/plain, */*",
       authorization: expect.any(String),
+      host: "localhost:8081",
       "user-agent": expect.any(String),
     });
     expect(pactResults[0].interactions[0].response.status).toEqual(200);

@@ -1,4 +1,4 @@
-import { DefaultRequestBody, MockedRequest, SetupWorkerApi } from "msw";
+import { DefaultBodyType, MockedRequest, SetupWorker } from "msw";
 import {
   addTimeout,
   checkUrlFilters,
@@ -9,7 +9,7 @@ import {
 } from "./utils/utils";
 import { convertMswMatchToPact } from "./convertMswMatchToPact";
 import { EventEmitter } from "events";
-import { SetupServerApi } from "msw/lib/types/node/glossary";
+import { SetupServer, } from "msw/lib/node/index";
 import { IsomorphicResponse } from "@mswjs/interceptors";
 export interface PactMswAdapterOptions {
   timeout?: number;
@@ -45,15 +45,15 @@ export const setupPactMswAdapter = ({
   server,
 }: {
   options: PactMswAdapterOptions;
-  worker?: SetupWorkerApi;
-  server?: SetupServerApi;
+  worker?: SetupWorker;
+  server?: SetupServer;
 }): PactMswAdapter => {
   if (!worker && !server) {
     throw new Error("Either a worker or server must be provided");
   }
 
   const isWorker = worker ? !!worker : false;
-  const mswMocker = worker ? worker : server;
+  const mswMocker = worker ? worker : server as SetupServer;
 
   if (!mswMocker) {
     throw new Error("Could not setup either the worker or server");
@@ -85,106 +85,311 @@ export const setupPactMswAdapter = ({
   const activeRequestIds: string[] = []; // Pending requests which are still valid
   const matches: MswMatch[] = []; // Completed request-response pairs
 
-  mswMocker.events.on("request:match", (req) => {
-    const url = req.url.toString();
-    if (!checkUrlFilters(url, options)) return;
-    if (options.debug) {
-      logGroup(["Matching request", req], { endGroup: true });
-    }
-
-    const startTime = Date.now();
-
-    pendingRequests.push(req);
-    activeRequestIds.push(req.id);
-
-    setTimeout(() => {
-      const activeIdx = activeRequestIds.indexOf(req.id);
-      emitter.emit("pact-msw-adapter:expired", req);
-      if (activeIdx >= 0) {
-        // Could be removed if completed or the test ended
-        activeRequestIds.splice(activeIdx, 1);
-        expiredRequests.push({
-          reqId: req.id,
-          startTime,
-        });
+  if (worker){
+    worker.events.on("request:match", (req) => {
+      const url = req.url.toString();
+      if (!checkUrlFilters(url, options)) return;
+      if (options.debug) {
+        logGroup(["Matching request", req], { endGroup: true });
       }
-    }, options.timeout);
-  });
-
-  mswMocker.events.on(
-    "response:mocked",
-    async (response: Response | IsomorphicResponse, reqId: string) => {
-      // https://mswjs.io/docs/extensions/life-cycle-events#responsemocked
-      // Note that the res instance differs between the browser and Node.js.
-      // Take this difference into account when operating with it.
-      const responseBody: string | undefined = isWorker
-        ? await (response as Response).text()
-        : (response as IsomorphicResponse).body;
-
-      logGroup(JSON.stringify(response), { endGroup: true });
-
-      const reqIdx = pendingRequests.findIndex((req) => req.id === reqId);
-      if (reqIdx < 0) return; // Filtered and (expired and cleared) requests
-
-      const endTime = Date.now();
-
-      const request = pendingRequests.splice(reqIdx, 1)[0];
-      const activeReqIdx = activeRequestIds.indexOf(reqId);
-      if (activeReqIdx < 0) {
-        // Expired requests and responses from previous tests
-
-        const oldReqId = oldRequestIds.find((id) => id === reqId);
-        const expiredReq = expiredRequests.find(
-          (expired) => expired.reqId === reqId
-        );
-        if (oldReqId) {
-          orphanResponses.push(request.url.toString());
-          log(`Orphan response: ${request.url}`, {
-            mode: "warning",
-            group: expiredReq !== undefined,
+  
+      const startTime = Date.now();
+  
+      pendingRequests.push(req);
+      activeRequestIds.push(req.id);
+  
+      setTimeout(() => {
+        const activeIdx = activeRequestIds.indexOf(req.id);
+        emitter.emit("pact-msw-adapter:expired", req);
+        if (activeIdx >= 0) {
+          // Could be removed if completed or the test ended
+          activeRequestIds.splice(activeIdx, 1);
+          expiredRequests.push({
+            reqId: req.id,
+            startTime,
           });
         }
-
-        if (expiredReq) {
-          if (!oldReqId) {
-            log(`Expired request to ${request.url.pathname}`, {
+      }, options.timeout);
+    });
+  
+    worker.events.on(
+      "response:mocked",
+      async (response: Response | IsomorphicResponse, reqId: string) => {
+        // https://mswjs.io/docs/extensions/life-cycle-events#responsemocked
+        // Note that the res instance differs between the browser and Node.js.
+        // Take this difference into account when operating with it.
+        const responseBody: string | undefined = isWorker
+          ? await (response as Response).text()
+          : (response as IsomorphicResponse).body;
+  
+        logGroup(JSON.stringify(response), { endGroup: true });
+  
+        const reqIdx = pendingRequests.findIndex((req) => req.id === reqId);
+        if (reqIdx < 0) return; // Filtered and (expired and cleared) requests
+  
+        const endTime = Date.now();
+  
+        const request = pendingRequests.splice(reqIdx, 1)[0];
+        const activeReqIdx = activeRequestIds.indexOf(reqId);
+        if (activeReqIdx < 0) {
+          // Expired requests and responses from previous tests
+  
+          const oldReqId = oldRequestIds.find((id) => id === reqId);
+          const expiredReq = expiredRequests.find(
+            (expired) => expired.reqId === reqId
+          );
+          if (oldReqId) {
+            orphanResponses.push(request.url.toString());
+            log(`Orphan response: ${request.url}`, {
               mode: "warning",
-              group: true,
+              group: expiredReq !== undefined,
             });
           }
-
-          expiredReq.duration = endTime - expiredReq.startTime;
-          console.log("url:", request.url);
-          console.log("timeout:", options.timeout);
-          console.log("duration:", expiredReq.duration);
-          console.groupEnd();
+  
+          if (expiredReq) {
+            if (!oldReqId) {
+              log(`Expired request to ${request.url.pathname}`, {
+                mode: "warning",
+                group: true,
+              });
+            }
+  
+            expiredReq.duration = endTime - expiredReq.startTime;
+            console.log("url:", request.url);
+            console.log("timeout:", options.timeout);
+            console.log("duration:", expiredReq.duration);
+            console.groupEnd();
+          }
+  
+          return;
         }
-
-        return;
+  
+        if (options.debug) {
+          logGroup(["Mocked response", response], { endGroup: true });
+        }
+  
+        activeRequestIds.splice(activeReqIdx, 1);
+        const match: MswMatch = {
+          request,
+          response,
+          body: responseBody,
+        };
+        emitter.emit("pact-msw-adapter:match", match);
+        matches.push(match);
       }
-
+    );
+  
+    worker.events.on("request:unhandled", (req) => {
+      const url = req.url.toString();
+      if (!checkUrlFilters(url, options)) return;
+  
+      unhandledRequests.push(url);
+      warning(`Unhandled request: ${url}`);
+    });
+  }
+  if (server){
+    server.events.on("request:match", (req) => {
+      const url = req.url.toString();
+      if (!checkUrlFilters(url, options)) return;
       if (options.debug) {
-        logGroup(["Mocked response", response], { endGroup: true });
+        logGroup(["Matching request", req], { endGroup: true });
       }
+  
+      const startTime = Date.now();
+  
+      pendingRequests.push(req);
+      activeRequestIds.push(req.id);
+  
+      setTimeout(() => {
+        const activeIdx = activeRequestIds.indexOf(req.id);
+        emitter.emit("pact-msw-adapter:expired", req);
+        if (activeIdx >= 0) {
+          // Could be removed if completed or the test ended
+          activeRequestIds.splice(activeIdx, 1);
+          expiredRequests.push({
+            reqId: req.id,
+            startTime,
+          });
+        }
+      }, options.timeout);
+    });
+  
+    server.events.on(
+      "response:mocked",
+      async (response: Response | IsomorphicResponse, reqId: string) => {
+        // https://mswjs.io/docs/extensions/life-cycle-events#responsemocked
+        // Note that the res instance differs between the browser and Node.js.
+        // Take this difference into account when operating with it.
+        const responseBody: string | undefined = isWorker
+          ? await (response as Response).text()
+          : (response as IsomorphicResponse).body;
+  
+        logGroup(JSON.stringify(response), { endGroup: true });
+  
+        const reqIdx = pendingRequests.findIndex((req) => req.id === reqId);
+        if (reqIdx < 0) return; // Filtered and (expired and cleared) requests
+  
+        const endTime = Date.now();
+  
+        const request = pendingRequests.splice(reqIdx, 1)[0];
+        const activeReqIdx = activeRequestIds.indexOf(reqId);
+        if (activeReqIdx < 0) {
+          // Expired requests and responses from previous tests
+  
+          const oldReqId = oldRequestIds.find((id) => id === reqId);
+          const expiredReq = expiredRequests.find(
+            (expired) => expired.reqId === reqId
+          );
+          if (oldReqId) {
+            orphanResponses.push(request.url.toString());
+            log(`Orphan response: ${request.url}`, {
+              mode: "warning",
+              group: expiredReq !== undefined,
+            });
+          }
+  
+          if (expiredReq) {
+            if (!oldReqId) {
+              log(`Expired request to ${request.url.pathname}`, {
+                mode: "warning",
+                group: true,
+              });
+            }
+  
+            expiredReq.duration = endTime - expiredReq.startTime;
+            console.log("url:", request.url);
+            console.log("timeout:", options.timeout);
+            console.log("duration:", expiredReq.duration);
+            console.groupEnd();
+          }
+  
+          return;
+        }
+  
+        if (options.debug) {
+          logGroup(["Mocked response", response], { endGroup: true });
+        }
+  
+        activeRequestIds.splice(activeReqIdx, 1);
+        const match: MswMatch = {
+          request,
+          response,
+          body: responseBody,
+        };
+        emitter.emit("pact-msw-adapter:match", match);
+        matches.push(match);
+      }
+    );
+  
+    server.events.on("request:unhandled", (req) => {
+      const url = req.url.toString();
+      if (!checkUrlFilters(url, options)) return;
+  
+      unhandledRequests.push(url);
+      warning(`Unhandled request: ${url}`);
+    });
+  }
 
-      activeRequestIds.splice(activeReqIdx, 1);
-      const match: MswMatch = {
-        request,
-        response,
-        body: responseBody,
-      };
-      emitter.emit("pact-msw-adapter:match", match);
-      matches.push(match);
-    }
-  );
+  // mswMocker.events.on("request:match", (req) => {
+  //   const url = req.url.toString();
+  //   if (!checkUrlFilters(url, options)) return;
+  //   if (options.debug) {
+  //     logGroup(["Matching request", req], { endGroup: true });
+  //   }
 
-  mswMocker.events.on("request:unhandled", (req) => {
-    const url = req.url.toString();
-    if (!checkUrlFilters(url, options)) return;
+  //   const startTime = Date.now();
 
-    unhandledRequests.push(url);
-    warning(`Unhandled request: ${url}`);
-  });
+  //   pendingRequests.push(req);
+  //   activeRequestIds.push(req.id);
+
+  //   setTimeout(() => {
+  //     const activeIdx = activeRequestIds.indexOf(req.id);
+  //     emitter.emit("pact-msw-adapter:expired", req);
+  //     if (activeIdx >= 0) {
+  //       // Could be removed if completed or the test ended
+  //       activeRequestIds.splice(activeIdx, 1);
+  //       expiredRequests.push({
+  //         reqId: req.id,
+  //         startTime,
+  //       });
+  //     }
+  //   }, options.timeout);
+  // });
+
+  // mswMocker.events.on(
+  //   "response:mocked",
+  //   async (response: Response | IsomorphicResponse, reqId: string) => {
+  //     // https://mswjs.io/docs/extensions/life-cycle-events#responsemocked
+  //     // Note that the res instance differs between the browser and Node.js.
+  //     // Take this difference into account when operating with it.
+  //     const responseBody: string | undefined = isWorker
+  //       ? await (response as Response).text()
+  //       : (response as IsomorphicResponse).body;
+
+  //     logGroup(JSON.stringify(response), { endGroup: true });
+
+  //     const reqIdx = pendingRequests.findIndex((req) => req.id === reqId);
+  //     if (reqIdx < 0) return; // Filtered and (expired and cleared) requests
+
+  //     const endTime = Date.now();
+
+  //     const request = pendingRequests.splice(reqIdx, 1)[0];
+  //     const activeReqIdx = activeRequestIds.indexOf(reqId);
+  //     if (activeReqIdx < 0) {
+  //       // Expired requests and responses from previous tests
+
+  //       const oldReqId = oldRequestIds.find((id) => id === reqId);
+  //       const expiredReq = expiredRequests.find(
+  //         (expired) => expired.reqId === reqId
+  //       );
+  //       if (oldReqId) {
+  //         orphanResponses.push(request.url.toString());
+  //         log(`Orphan response: ${request.url}`, {
+  //           mode: "warning",
+  //           group: expiredReq !== undefined,
+  //         });
+  //       }
+
+  //       if (expiredReq) {
+  //         if (!oldReqId) {
+  //           log(`Expired request to ${request.url.pathname}`, {
+  //             mode: "warning",
+  //             group: true,
+  //           });
+  //         }
+
+  //         expiredReq.duration = endTime - expiredReq.startTime;
+  //         console.log("url:", request.url);
+  //         console.log("timeout:", options.timeout);
+  //         console.log("duration:", expiredReq.duration);
+  //         console.groupEnd();
+  //       }
+
+  //       return;
+  //     }
+
+  //     if (options.debug) {
+  //       logGroup(["Mocked response", response], { endGroup: true });
+  //     }
+
+  //     activeRequestIds.splice(activeReqIdx, 1);
+  //     const match: MswMatch = {
+  //       request,
+  //       response,
+  //       body: responseBody,
+  //     };
+  //     emitter.emit("pact-msw-adapter:match", match);
+  //     matches.push(match);
+  //   }
+  // );
+
+  // mswMocker.events.on("request:unhandled", (req) => {
+  //   const url = req.url.toString();
+  //   if (!checkUrlFilters(url, options)) return;
+
+  //   unhandledRequests.push(url);
+  //   warning(`Unhandled request: ${url}`);
+  // });
 
   return {
     emitter,
@@ -378,7 +583,7 @@ export interface PactInteraction {
     method: string;
     path: string;
     headers: any;
-    body: DefaultRequestBody;
+    body: DefaultBodyType;
     query?: string;
   };
   response: {

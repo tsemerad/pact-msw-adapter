@@ -1,8 +1,9 @@
+import { MockedResponse } from "@mswjs/interceptors";
 import { convertMswMatchToPact } from "./convertMswMatchToPact";
 import { MswMatch, PactFile } from "./pactMswAdapter";
-import { Headers } from "headers-utils";
-const pjson = require("../package.json");
+import { Headers } from "headers-polyfill";
 
+const pjson = require("../package.json");
 const generatedPact: PactFile = {
   consumer: { name: "interaction.consumer.name" },
   provider: { name: "interaction.provider.name" },
@@ -53,6 +54,11 @@ const generatedPact: PactFile = {
 
 const sampleMatch: MswMatch[] = [
   {
+    // YAK SHAVE: this is a hack to get the test to pass
+    // src/convertMswMatchToPact.msw.spec.ts:57:5 - error TS2322: Type "{ id: string; url: URL; method: string; body: undefined; headers: Headers; cookies: {}; redirect: "manual"; referrer: string; keepalive: false; cache: "default"; mode: "cors"; referrerPolicy: "no-referrer"; ... 12 more ...; arrayBuffer: any; }" is not assignable to type "MockedRequest<DefaultBodyType>".
+    // Property "getCookies" is private in type "MockedRequest<DefaultBodyType>" but not in type "{ id: string; url: URL; method: string; body: undefined; headers: HeadersPolyfill; cookies: {}; redirect: "manual"; referrer: string; keepalive: false; cache: "default"; mode: "cors"; ... 13 more ...; arrayBuffer: any; }".
+
+    // @ts-ignore
     request: {
       id: "de5eefb0-c451-4ae2-9695-e02626f00ca7",
       url: new URL("http://localhost:8081/products"),
@@ -76,6 +82,15 @@ const sampleMatch: MswMatch[] = [
       destination: "document",
       bodyUsed: false,
       credentials: "same-origin",
+      priority: "auto",
+      getCookies: null as any,
+      _body: null,
+      _bodyUsed: null,
+      clone: null as any,
+      passthrough: null as any,
+      text: null as any,
+      json: null as any,
+      arrayBuffer: null as any,
     },
     response: {
       status: 200,
@@ -91,6 +106,7 @@ const sampleMatch: MswMatch[] = [
     body: JSON.stringify([{ id: "09", type: "CREDIT_CARD", name: "Gem Visa" }]),
   },
   {
+    // @ts-ignore
     request: {
       id: "073d6de0-e1ac-11ec-8fea-0242ac120002",
       url: new URL("http://localhost:8081/products?sort=asc"),
@@ -114,6 +130,15 @@ const sampleMatch: MswMatch[] = [
       destination: "document",
       bodyUsed: false,
       credentials: "same-origin",
+      priority: "auto",
+      getCookies: null as any,
+      _body: null,
+      _bodyUsed: null,
+      clone: null as any,
+      passthrough: null as any,
+      text: null as any,
+      json: null as any,
+      arrayBuffer: null as any,
     },
     response: {
       status: 200,
